@@ -58,6 +58,10 @@ http://serveisoberts.gencat.cat/equipaments/search/csv?q=educaci%C3%B3
 11 Galicia
 ----------
 
+Información obtenida en el portal de Open Data de la Xunta
+
+http://abertos.xunta.es/catalogo/ensino-formacion/-/dataset/0257/centros-educativos-galicia
+
 12 Madrid
 ---------
 

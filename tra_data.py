@@ -28,10 +28,7 @@ if os.path.isfile(ARCHIVOCSV):
     subprocess.call(r"""sed -i 's/"\([^,]*\),\([^,]*\)","\([^,]*\),\([^,]*\)"\(.*\)/\1.\2,\3.\4\5/' temp.csv""", shell=True)
     subprocess.call('csvcut -c codigo,dgenerica,despecifica,dabreviada,regimen,tipocalle,direccion,numero,codpostal,localidad,provincia,telefono,fax,latitud,longitud temp.csv > {}'.format(ARCHIVOCSV), shell=True)
 
-    os.remove('temp.csv')
+    #os.remove('temp.csv')
 
     subprocess.call('ogr2ogr -f "ESRI Shapefile" coles_cp_ods.shp registre.ods.csv', shell=True)
     subprocess.call('ogr2ogr -f "ESRI Shapefile" coles_cp_ods.shp registre.ods.vrt', shell=True)
-
-
-

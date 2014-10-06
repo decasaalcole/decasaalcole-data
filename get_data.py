@@ -28,16 +28,15 @@ with open(NOMBREARCHIVO, "wb") as ardat:
 # La conversión a CSV exige que LibreOffice esté instalado
 # Chequea que Libreoffice está instalado
 for path in os.environ.get('PATH', '').split(':'):
-    if os.path.exists(os.path.join(path, PROGRAM)) and not os.path.isdir(\
+    if os.path.exists(os.path.join(path, PROGRAM)) and not os.path.isdir(
             os.path.join(path, PROGRAM)):
         # Lanza la conversion
-        subprocess.call('libreoffice --headless --convert-to ods.csv {}'\
-                .format(NOMBREARCHIVO), shell=True)
-        subprocess.call('iconv -f ISO-8859-1 -t UTF-8 {} --output {}'\
-                .format(ARCHIVOCSV, ARCHIVOCSVUTF), shell=True)
+        subprocess.call('libreoffice --headless --convert-to ods.csv {}'
+                        .format(NOMBREARCHIVO), shell=True)
+        subprocess.call('iconv -f ISO-8859-1 -t UTF-8 {} --output {}'
+                        .format(ARCHIVOCSV, ARCHIVOCSVUTF), shell=True)
         os.remove(ARCHIVOCSV)
         os.rename(ARCHIVOCSVUTF, ARCHIVOCSV)
 
 if not os.path.isfile(ARCHIVOCSV):
     print "Ha ocurrido un error en la conversión o LibreOffice no está instalado, deberás crear el CSV por otro medio"
-
