@@ -1,0 +1,14 @@
+version: '3.7'
+
+services:
+
+  dcac-data:
+    build:
+      context: .
+    volumes:
+      - .:/usr/local/app/
+    env_file:
+      - .env
+    ports:
+      - "8888:8888"
+    command: jupyter lab --NotebookApp.token= --ip=0.0.0.0 --no-browser --allow-root
