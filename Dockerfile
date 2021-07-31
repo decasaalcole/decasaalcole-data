@@ -20,7 +20,6 @@ RUN set -ex ; \
     cd ${BUILD_DIR}; \
     poetry config virtualenvs.create false ; \
     poetry install --no-interaction --no-ansi $POETRY_EXTRA ; \
-    apt-get remove -y --purge python3-pip; \
     rm -rf ${BUILD_DIR}/*;
 
 COPY ./ /usr/local/app/
