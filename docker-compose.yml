@@ -12,3 +12,16 @@ services:
     ports:
       - "8888:8888"
     command: jupyter lab --NotebookApp.token= --ip=0.0.0.0 --no-browser --allow-root
+
+  dcac-postgis:
+    image: geographica/postgis:unbiased_uakari
+    ports:
+      - "5432:5432"
+    volumes:
+      - dcac-postgis-data:/data
+      - ./:/usr/local/app
+    environment:
+      - POSTGRES_PASSWD=dcac
+
+volumes:
+  dcac-postgis-data:
