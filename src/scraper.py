@@ -247,11 +247,8 @@ class SchoolScraper:
                 # Create school data dictionary using field names
                 school_data = {}
                 for field_name, cell in zip(field_names, cells):
-                    # Special handling for code field which contains a link
+                    # Skip detail_url field
                     if field_name == 'código':
-                        link = cell.find('a')
-                        if link and 'href' in link.attrs:
-                            school_data['detail_url'] = link['href']
                         school_data[field_name] = cell.text.strip()
                     else:
                         school_data[field_name] = cell.text.strip()
@@ -299,10 +296,37 @@ class SchoolScraper:
             logger.info(f"Saved data to {output_file} in CSV format with {encoding} encoding")
         elif output_format == 'JSON':
             output_file = os.path.join(self.output_dir, 'schools_list.json')
-            # Save as JSON
+            
+            # Clean and optimize data
+            optimized_data = []
+            for school in data:
+                # Remove empty values and detail_url
+                cleaned_school = {
+                    k: v for k, v in school.items() 
+                    if v and k != 'detail_url' and v != [] and v != {}
+                }
+                
+                # Optimize arrays
+                if 'instalaciones' in cleaned_school:
+                    cleaned_school['instalaciones'] = [i for i in cleaned_school['instalaciones'] if i]
+                if 'horario' in cleaned_school:
+                    cleaned_school['horario'] = [h for h in cleaned_school['horario'] if h]
+                if 'informacion_adicional' in cleaned_school:
+                    cleaned_school['informacion_adicional'] = [i for i in cleaned_school['informacion_adicional'] if i]
+                
+                # Optimize nested structures
+                if 'niveles_autorizados' in cleaned_school:
+                    cleaned_school['niveles_autorizados'] = [
+                        {k: v for k, v in level.items() if v}
+                        for level in cleaned_school['niveles_autorizados']
+                    ]
+                
+                optimized_data.append(cleaned_school)
+            
+            # Save as JSON with minimal whitespace
             with open(output_file, 'w', encoding=encoding) as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info(f"Saved data to {output_file} in JSON format with {encoding} encoding")
+                json.dump(optimized_data, f, ensure_ascii=False, separators=(',', ':'))
+            logger.info(f"Saved optimized data to {output_file} in JSON format with {encoding} encoding")
         else:
             raise ValueError(f"Unsupported output format: {output_format}. Supported formats are CSV and JSON")
 
@@ -436,17 +460,21 @@ class SchoolScraper:
                 if schedule_section:
                     schedule_items = schedule_section.find_all('li')
                     if schedule_items:
-                        # Filter out header text
-                        headers = {
-                            "NIVELES AUTORIZADOS",
-                            "ADSCRIPCIONES",
-                            "JORNADA",
-                            "MÁS INFORMACIÓN"
+                        # Filter to only keep items containing schedule-related keywords
+                        schedule_keywords = {
+                            "jornada",
+                            "tarde",
+                            "mañana",
+                            "horario",
+                            "entrada",
+                            "salida",
+                            "hora",
+                            "h."
                         }
                         schedule = [
                             item.text.strip() 
                             for item in schedule_items 
-                            if item.text.strip() not in headers
+                            if any(keyword in item.text.strip().lower() for keyword in schedule_keywords)
                         ]
                         if schedule:
                             details['horario'] = schedule
@@ -457,22 +485,6 @@ class SchoolScraper:
                     info_items = info_section.find_all('td')
                     if info_items:
                         details['informacion_adicional'] = [item.text.strip() for item in info_items if item.text.strip()]
-                
-                # Extract adscriptions
-                adscriptions = []
-                adscription_section = soup.find('div', id="secc13")
-                if adscription_section:
-                    adscription_rows = adscription_section.find_all('tr')
-                    for row in adscription_rows[1:]:  # Skip header
-                        cells = row.find_all('td')
-                        if len(cells) >= 2:
-                            adscription_info = {
-                                'tipo': cells[0].text.strip(),
-                                'centro': cells[1].text.strip()
-                            }
-                            adscriptions.append(adscription_info)
-                if adscriptions:
-                    details['adscripciones'] = adscriptions
                 
             except Exception as e:
                 logger.warning(f"Error extracting specific field: {str(e)}")

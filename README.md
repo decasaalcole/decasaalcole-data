@@ -65,7 +65,13 @@ REQUEST_DELAY=1.0  # Delay between requests in seconds
 
 3. **Run in local mode** (using local HTML files, for dev purposes):
    ```bash
-   LOCAL_MODE=1 docker-compose up scraper
+   Add 
+   
+   LOCAL_MODE=1
+
+   to the .env file and then
+   
+   docker-compose up scraper
    ```
 
 4. **View the output**:

@@ -5,10 +5,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 from scraper import SchoolScraper
 
+# Create logs directory if it doesn't exist
+os.makedirs('logs', exist_ok=True)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/scraper.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -71,7 +78,7 @@ def main() -> None:
     - Local mode: Uses pre-downloaded HTML files from the tmp/ directory
     
     Environment Variables:
-        USE_LOCAL: Set to '1' to enable local mode
+        LOCAL_MODE: Set to '1' to enable local mode
         Other variables are defined in the .env file
     
     Raises:
@@ -81,9 +88,12 @@ def main() -> None:
         # Setup directories
         setup_directories()
         
+        # Check if local mode is enabled
+        local_mode = os.getenv('LOCAL_MODE', '0') == '1'
+        logger.info(f"Running in {'local' if local_mode else 'normal'} mode")
+        
         # Initialize scraper
-        use_local = os.getenv('USE_LOCAL', '0') == '1'
-        scraper = SchoolScraper(use_local=use_local)
+        scraper = SchoolScraper(use_local=local_mode)
         
         # Run scraper
         logger.info("Starting school scraping process")
