@@ -10,6 +10,7 @@ A Python-based web scraper for collecting school information from the Valencian 
 - Rate limiting to prevent server overload
 - Graceful error handling for missing or malformed data
 - Docker support for easy deployment
+- Ability to scrape specific schools by their codes
 
 ## Project Structure
 
@@ -58,7 +59,7 @@ REQUEST_DELAY=1.0  # Delay between requests in seconds
    docker-compose build
    ```
 
-2. **Run the scraper in normal mode**:
+2. **Run the scraper in normal mode** (scrapes all schools):
    ```bash
    docker-compose up scraper
    ```
@@ -74,8 +75,40 @@ REQUEST_DELAY=1.0  # Delay between requests in seconds
    docker-compose up scraper
    ```
 
-4. **View the output**:
+4. **Scrape specific schools**:
+   ```bash
+   docker-compose run scraper python src/main.py --school-codes 03012591 03012592
+   ```
+
+5. **Combine local mode with specific schools**:
+   ```bash
+   docker-compose run scraper python src/main.py --school-codes 03012591 03012592 --local
+   ```
+
+6. **View the output**:
    The scraped data will be saved in the `data` directory in your chosen format (CSV or JSON).
+
+## Command Line Arguments
+
+The scraper supports the following command line arguments:
+
+- `--local`: Run in local mode using pre-downloaded HTML files from the `tmp` directory
+- `--school-codes`: List of specific school codes to scrape (e.g., "03012591 03012592")
+
+Examples:
+```bash
+# Scrape all schools
+python src/main.py
+
+# Scrape specific schools
+python src/main.py --school-codes 03012591 03012592
+
+# Run in local mode
+python src/main.py --local
+
+# Scrape specific schools in local mode
+python src/main.py --school-codes 03012591 03012592 --local
+```
 
 ## How It Works
 
