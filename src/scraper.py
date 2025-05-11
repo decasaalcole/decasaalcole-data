@@ -152,6 +152,15 @@ class SchoolScraper:
                 raise
     
     def _process_school(self, school):
+        """
+        Internal method to process each school in a multiprocessing pool.
+
+        Args:
+            school (Dict): Dictionary containing basic school information
+        Returns:
+            Dict: A new dictionary containing enriched school information
+
+        """
         if 'código' in school:
             try:
                 logger.info(f"Fetching details for school: {school.get('centro', 'Unknown')}")
@@ -177,6 +186,10 @@ class SchoolScraper:
         2. Extracts basic information for each school
         3. Fetches and extracts detailed information for each school
         4. Saves the collected data
+
+        Args:
+            subset (int): Number of schools to scrape (0 for all schools)
+            threads (int): Number of threads to use for scraping (default: 1)
         
         Returns:
             List[Dict]: List of dictionaries containing school data
