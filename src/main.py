@@ -61,6 +61,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='School data scraper')
     parser.add_argument('--local', action='store_true',
                       help='Use local files from tmp/ directory instead of making HTTP requests')
+    parser.add_argument('--school-codes', type=str, nargs='+',
+                      help='List of school codes to scrape (e.g., "03012591 03012592")')
     return parser.parse_args()
 
 def main() -> None:
@@ -88,8 +90,11 @@ def main() -> None:
         # Setup directories
         setup_directories()
         
+        # Parse command line arguments
+        args = parse_args()
+        
         # Check if local mode is enabled
-        local_mode = os.getenv('LOCAL_MODE', '0') == '1'
+        local_mode = os.getenv('LOCAL_MODE', '0') == '1' or args.local
         logger.info(f"Running in {'local' if local_mode else 'normal'} mode")
         
         # Initialize scraper
@@ -97,7 +102,11 @@ def main() -> None:
         
         # Run scraper
         logger.info("Starting school scraping process")
-        schools_data = scraper.scrape_schools()
+        if args.school_codes:
+            logger.info(f"Scraping specific schools: {args.school_codes}")
+            schools_data = scraper.scrape_specific_schools(args.school_codes)
+        else:
+            schools_data = scraper.scrape_schools()
         logger.info(f"Successfully scraped {len(schools_data)} schools")
         
     except Exception as e:
