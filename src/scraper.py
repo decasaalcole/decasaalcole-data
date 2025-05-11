@@ -167,6 +167,24 @@ class SchoolScraper:
                 school_details = self._extract_school_data(school['código'])
                 result = school.copy()
                 result.update(school_details)
+
+                # Remove duplicated keys
+                if 'código' in result:
+                    result['codigo'] = result.pop('código')
+                if 'rég.' in result:
+                    result['reg'] = result.pop('rég.')
+                if 'dirección' in result:
+                    result['dir'] = result.pop('dirección')
+                if 'teléfono' in result:
+                    result['tel'] = result.pop('teléfono')
+                if 'localidad' in result:
+                    localidad = result.pop('localidad')
+                    # if a number is found in localidad, extract it
+                    if any(char.isdigit() for char in localidad):
+                        result['cp'], result['muni'] = localidad.split(' - ')
+                    else:
+                        result['muni'] = localidad
+
                 # Add delay between requests if not in local mode
                 if not self.use_local:
                     time.sleep(self.request_delay)
@@ -338,7 +356,7 @@ class SchoolScraper:
                     if v and k != 'detail_url' and v != [] and v != {}
                 }
                 
-                # Optimize arrays
+                # Optimize arrays removing empty properties
                 if 'instalaciones' in cleaned_school:
                     cleaned_school['instalaciones'] = [i for i in cleaned_school['instalaciones'] if i]
                 if 'horario' in cleaned_school:
@@ -357,7 +375,7 @@ class SchoolScraper:
             
             # Save as JSON with minimal whitespace
             with open(output_file, 'w', encoding=encoding) as f:
-                json.dump(optimized_data, f, ensure_ascii=False, separators=(',', ':'))
+                json.dump(optimized_data, f, ensure_ascii=False, separators=(',', ':'), indent=4)
             logger.info(f"Saved optimized data to {output_file} in JSON format with {encoding} encoding")
         else:
             raise ValueError(f"Unsupported output format: {output_format}. Supported formats are CSV and JSON")
@@ -426,9 +444,9 @@ class SchoolScraper:
                 for cell in cells:
                     text = cell.text.strip()
                     if 'Código:' in text:
-                        details['codigo'] = text.replace('Código:', '').strip()
+                        details['código'] = text.replace('Código:', '').strip()
                     elif 'Régimen:' in text:
-                        details['regimen'] = text.replace('Régimen:', '').strip()
+                        details['rég.'] = text.replace('Régimen:', '').strip()
                     elif 'CIF:' in text:
                         details['cif'] = text.replace('CIF:', '').strip()
                 
@@ -443,9 +461,9 @@ class SchoolScraper:
                             value = cells[1].text.strip()
                             
                             if 'dirección:' in label:
-                                details['direccion'] = value
+                                details['dirección'] = value
                             elif 'teléfono:' in label:
-                                details['telefono'] = value
+                                details['teléfono'] = value
                             elif 'e-correo:' in label:
                                 details['email'] = value
                             elif 'localidad:' in label:
