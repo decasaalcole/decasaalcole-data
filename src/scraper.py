@@ -136,6 +136,13 @@ class SchoolScraper:
                 if not response.text.strip():
                     raise ValueError("Received empty response")
                 
+                # Write the content in the tmp folder
+                os.makedirs('tmp', exist_ok=True)
+                with open('tmp/consulta01.html', 'w', encoding='utf-8') as f:
+                    f.write(response.text)
+                    logger.debug("Saved page content to tmp/consulta01.html")
+
+                
                 # Check if the content contains the expected table structure
                 soup = BeautifulSoup(response.text, 'lxml')
                 if not soup.find('table'):
@@ -163,7 +170,7 @@ class SchoolScraper:
         """
         if 'código' in school:
             try:
-                logger.info(f"Fetching details for school: {school.get('centro', 'Unknown')}")
+                logger.debug(f"Fetching details for school: {school.get('centro', 'Unknown')}, code: {school['código']}")
                 school_details = self._extract_school_data(school['código'])
                 result = school.copy()
                 result.update(school_details)
@@ -181,18 +188,41 @@ class SchoolScraper:
                     localidad = result.pop('localidad')
                     # if a number is found in localidad, extract it
                     if any(char.isdigit() for char in localidad):
-                        result['cp'], result['muni'] = localidad.split(' - ')
+                        muni_parts = localidad.split(' - ')
+                        if len(muni_parts) < 2:
+                            logger.warning(f"Unexpected format for localidad: {localidad}")
+                            result['muni'] = localidad
+                            result['cp'] = ''
+                        else:
+                            result['cp'] = muni_parts[0]
+                            result['muni'] = muni_parts[1]
                     else:
                         result['muni'] = localidad
+
+                # Rename some keys
+                if 'centro' in result:
+                    result['denGenEs'] = result.pop('centro')
+                if 'nombre' in result:
+                    result['deno'] = result.pop('nombre')
+                
+                # Some postprocessing
+                if 'deno' in result:
+                    result['deno'] = result['deno'].replace('  ', ' ').strip()
+                    result['deno'] = result['deno'].replace('\n', ' ').strip()
+                
+                # Sort the keys in the result dictionary based on the keys
+                sorted_result = {k: result[k] for k in sorted(result.keys())}    
 
                 # Add delay between requests if not in local mode
                 if not self.use_local:
                     time.sleep(self.request_delay)
                 
-                return result 
+                return sorted_result 
                     
             except Exception as e:
-                logger.error(f"Failed to fetch details for school {school.get('centro', 'Unknown')}: {str(e)}")
+                logger.error(f"Failed to fetch details for school {school.get('código')} - {school.get('centro', 'Unknown')}: {str(e)}")
+                # Print also the stack trace
+                logger.exception(e)
                 return None
 
     def scrape_schools(self, subset: int = 0, threads: int = 1) -> List[Dict]:
@@ -252,7 +282,7 @@ class SchoolScraper:
 
             
             # Save the data
-            self._save_data(results)
+            self._save_data([r for r in results if r is not None])
             
             return schools_data
             
@@ -297,11 +327,7 @@ class SchoolScraper:
                 # Create school data dictionary using field names
                 school_data = {}
                 for field_name, cell in zip(field_names, cells):
-                    # Skip detail_url field
-                    if field_name == 'código':
-                        school_data[field_name] = cell.text.strip()
-                    else:
-                        school_data[field_name] = cell.text.strip()
+                    school_data[field_name] = cell.text.strip()
                 
                 schools_data.append(school_data)
                 #logger.debug(f"Extracted data for school: {school_data.get('centro', 'Unknown')}")
@@ -357,25 +383,25 @@ class SchoolScraper:
                 }
                 
                 # Optimize arrays removing empty properties
-                if 'instalaciones' in cleaned_school:
-                    cleaned_school['instalaciones'] = [i for i in cleaned_school['instalaciones'] if i]
+                if 'inst' in cleaned_school:
+                    cleaned_school['inst'] = [i for i in cleaned_school['inst'] if i]
                 if 'horario' in cleaned_school:
                     cleaned_school['horario'] = [h for h in cleaned_school['horario'] if h]
-                if 'informacion_adicional' in cleaned_school:
-                    cleaned_school['informacion_adicional'] = [i for i in cleaned_school['informacion_adicional'] if i]
+                if 'info' in cleaned_school:
+                    cleaned_school['info'] = [i for i in cleaned_school['info'] if i]
                 
                 # Optimize nested structures
-                if 'niveles_autorizados' in cleaned_school:
-                    cleaned_school['niveles_autorizados'] = [
+                if 'niveles' in cleaned_school:
+                    cleaned_school['niveles'] = [
                         {k: v for k, v in level.items() if v}
-                        for level in cleaned_school['niveles_autorizados']
+                        for level in cleaned_school['niveles']
                     ]
                 
                 optimized_data.append(cleaned_school)
             
             # Save as JSON with minimal whitespace
             with open(output_file, 'w', encoding=encoding) as f:
-                json.dump(optimized_data, f, ensure_ascii=False, separators=(',', ':'), indent=4)
+                json.dump(optimized_data, f, ensure_ascii=False, separators=(',', ':'))
             logger.info(f"Saved optimized data to {output_file} in JSON format with {encoding} encoding")
         else:
             raise ValueError(f"Unsupported output format: {output_format}. Supported formats are CSV and JSON")
@@ -398,7 +424,14 @@ class SchoolScraper:
         try:
             if self.use_local:
                 logger.info("Local mode enabled, using local file")
-                local_file = Path('tmp/centro_03012591.html')
+
+                # Check if the local file exists
+                local_file = Path(f'tmp/centro_{school_code}.html')
+                # If the file doesn't exist, use a default file for testing
+                if not local_file.exists():
+                    local_file = Path('tmp/centro_03012591.html')
+                
+                # Raise an error if the file doesn't exist
                 if not local_file.exists():
                     raise FileNotFoundError(f"Local file not found: {local_file}")
                 
@@ -426,6 +459,12 @@ class SchoolScraper:
                 )
                 response.raise_for_status()
                 html_content = response.text
+
+                # Write the content in the tmp folder
+                os.makedirs('tmp', exist_ok=True)
+                with open(f'tmp/centro_{school_code}.html', 'w', encoding='utf-8') as f:
+                    f.write(html_content)
+                logger.debug(f"Saved detail page to tmp/centro_{school_code}.html")
             
             # Parse the detail page
             soup = BeautifulSoup(html_content, 'lxml')
@@ -451,32 +490,50 @@ class SchoolScraper:
                         details['cif'] = text.replace('CIF:', '').strip()
                 
                 # Extract contact information
-                contact_table = soup.find('table', width="100%", border="0")
-                if contact_table:
-                    rows = contact_table.find_all('tr')
-                    for row in rows:
-                        cells = row.find_all('td')
-                        if len(cells) >= 2:
-                            label = cells[0].text.strip().lower()
-                            value = cells[1].text.strip()
-                            
-                            if 'dirección:' in label:
-                                details['dirección'] = value
-                            elif 'teléfono:' in label:
-                                details['teléfono'] = value
-                            elif 'e-correo:' in label:
-                                details['email'] = value
-                            elif 'localidad:' in label:
-                                details['localidad'] = value
-                            elif 'comarca:' in label:
-                                details['comarca'] = value
-                            elif 'titular:' in label:
-                                details['titular'] = value
-                            elif 'lat:' in label:
-                                details['latitud'] = value
-                            elif 'long:' in label:
-                                details['longitud'] = value
+                # Find the third table inside a named div
+                outer_div = soup.find_all('div', {'class': 'nivelCentro'})
+                if outer_div:
+                    # Find the tables inside the div
+                    tables = outer_div[0].find_all('table')
+                    if tables and len(tables) >= 3:
+                        # Get the third table where the contact details are
+                        table = tables[2]
+                        # Get the rows and iterate them to find cells with desired labels
+                        rows = table.find_all('tr')
+                        for row_index, row in enumerate(rows):
+                            # Find all cells in the row
+                            cells = row.find_all('td')
+
+                            for index, cell in enumerate(cells):
+                                label = cell.text.strip().lower()
+                                if 'dirección:' in label:
+                                    details['dirección'] = cells[index + 1].text.strip()
+                                elif 'teléfono:' in label:
+                                    details['tel'] = cells[index + 1].text.strip()
+                                elif 'e-correo:' in label:
+                                    details['email'] = cells[index + 1].text.strip()
+                                elif 'localidad:' in label:
+                                    details['muni'] = cells[index + 1].text.strip()
+                                elif 'comarca:' in label:
+                                    details['com'] = cells[index + 1].text.strip()
+                                elif 'titular:' in label:
+                                    details['titular'] = cells[index + 1].text.strip()
+                                elif 'lat:' in label:
+                                    lat_row = rows[row_index + 1]
+                                    # Get the cell at the same index in the next row
+                                    lat_cell = lat_row.find_all('td')[index]
+                                    details['lat'] = lat_cell.text.strip()
+                                elif 'long:' in label:
+                                    long_row = rows[row_index + 1]
+                                    # Get the cell at the same index in the next row
+                                    long_cell = long_row.find_all('td')[index]
+                                    details['long'] = long_cell.text.strip()
+                else:
+                    logger.warning("No contact details div found")
                 
+                # Extract coordinates
+
+
                 # Extract facilities
                 facilities = []
                 facility_icons = soup.find_all('img', title=True)
@@ -484,7 +541,7 @@ class SchoolScraper:
                     if icon.get('title'):
                         facilities.append(icon['title'])
                 if facilities:
-                    details['instalaciones'] = facilities
+                    details['inst'] = facilities
                 
                 # Extract authorized levels
                 levels = []
@@ -500,33 +557,33 @@ class SchoolScraper:
                                 if len(cells) >= 5:
                                     level_info = {
                                         'nivel': cells[0].text.strip(),
-                                        'unidades_autorizadas': cells[1].text.strip(),
-                                        'puestos_autorizados': cells[2].text.strip(),
-                                        'unidades_activas': cells[3].text.strip(),
-                                        'puestos_activos': cells[4].text.strip()
+                                        'uni_auto': cells[1].text.strip(),
+                                        'pues_auto': cells[2].text.strip(),
+                                        'uni_act': cells[3].text.strip(),
+                                        'pues_act': cells[4].text.strip()
                                     }
                                     levels.append(level_info)
                                 elif len(cells) >= 3:
                                     level_info = {
                                         'nivel': cells[0].text.strip(),
-                                        'unidades_autorizadas': cells[1].text.strip(),
-                                        'puestos_autorizados': cells[2].text.strip(),
-                                        'unidades_activas': '',
-                                        'puestos_activos': ''
+                                        'uni_auto': cells[1].text.strip(),
+                                        'pues_auto': cells[2].text.strip(),
+                                        'uni_act': '',
+                                        'pues_act': ''
                                     }
                                     levels.append(level_info)
                                 elif len(cells) >= 2:
                                     level_info = {
                                         'nivel': cells[0].text.strip(),
-                                        'unidades_autorizadas': cells[1].text.strip(),
-                                        'puestos_autorizados': '',
-                                        'unidades_activas': '',
-                                        'puestos_activos': ''
+                                        'uni_auto': cells[1].text.strip(),
+                                        'pues_auto': '',
+                                        'uni_act': '',
+                                        'pues_act': ''
                                     }
                                     levels.append(level_info)
                             break  # Exit the loop once we find and process the correct table
                 if levels:
-                    details['niveles_autorizados'] = levels
+                    details['niveles'] = levels
                 
                 # Extract schedule
                 schedule_section = soup.find('div', id="secc152")
@@ -557,7 +614,7 @@ class SchoolScraper:
                 if info_section:
                     info_items = info_section.find_all('td')
                     if info_items:
-                        details['informacion_adicional'] = [item.text.strip() for item in info_items if item.text.strip()]
+                        details['info'] = [item.text.strip() for item in info_items if item.text.strip()]
                 
             except Exception as e:
                 logger.warning(f"Error extracting specific field: {str(e)}")
