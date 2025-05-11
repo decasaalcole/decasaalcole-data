@@ -8,7 +8,20 @@ from pathlib import Path
 import json
 import time
 
+from multiprocessing import Pool
+
+import requests_cache
+from requests_cache.backends.sqlite import SQLiteCache
+
 logger = logging.getLogger(__name__)
+
+# Define a requests cache backend as a SQLite database in the data folder
+requests_backend = SQLiteCache('data/school_scraper_cache.sqlite')
+# Store the cached session globally to prevent multiprocessing issues
+requests_session = requests_cache.CachedSession('SchoolScrapper', backend=requests_backend, allowable_methods=['GET', 'POST'])
+requests_session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+})
 
 class SchoolScraper:
     """
@@ -54,12 +67,6 @@ class SchoolScraper:
         self.max_retries = int(os.getenv('MAX_RETRIES', '3'))
         self.output_dir = os.getenv('OUTPUT_DIR', './data')
         self.request_delay = float(os.getenv('REQUEST_DELAY', '1.0'))
-        
-        # Set up session with retry logic
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
     
     def _get_page_content(self) -> str:
         """
@@ -103,7 +110,7 @@ class SchoolScraper:
                     "t": "3",
                     "aceptar": "Buscar"
                 }
-                response = self.session.post(
+                response = requests_session.post(
                     self.base_url,
                     data=payload,
                     timeout=self.request_timeout,
@@ -144,7 +151,24 @@ class SchoolScraper:
                 logger.error(f"Page content validation failed: {str(e)}")
                 raise
     
-    def scrape_schools(self) -> List[Dict]:
+    def _process_school(self, school):
+        if 'código' in school:
+            try:
+                logger.info(f"Fetching details for school: {school.get('centro', 'Unknown')}")
+                school_details = self._extract_school_data(school['código'])
+                result = school.copy()
+                result.update(school_details)
+                # Add delay between requests if not in local mode
+                if not self.use_local:
+                    time.sleep(self.request_delay)
+                
+                return result 
+                    
+            except Exception as e:
+                logger.error(f"Failed to fetch details for school {school.get('centro', 'Unknown')}: {str(e)}")
+                return None
+
+    def scrape_schools(self, subset: int = 0, threads: int = 1) -> List[Dict]:
         """
         Main method to scrape school data.
         
@@ -185,24 +209,19 @@ class SchoolScraper:
             # Extract data from the table
             schools_data = self._extract_table_data(target_table)
             
-            # Extract detailed information for each school
-            for school in schools_data:
-                if 'código' in school:
-                    try:
-                        logger.info(f"Fetching details for school: {school.get('centro', 'Unknown')}")
-                        school_details = self._extract_school_data(school['código'])
-                        school.update(school_details)
-                        
-                        # Add delay between requests if not in local mode
-                        if not self.use_local:
-                            time.sleep(self.request_delay)
-                            
-                    except Exception as e:
-                        logger.error(f"Failed to fetch details for school {school.get('centro', 'Unknown')}: {str(e)}")
-                        continue
+            # Extract detailed information for each school using a multiprocessing pool
+            with Pool(processes=threads) as pool:
+                # Retrieving only a subset of schools if specified
+                if subset > 0:
+                    schools_data = schools_data[:subset]
+                    logger.warning(f"⚠  Only processingc {len(schools_data)} schools")
+                
+                # Use map to process each school in parallel
+                results = pool.map(self._process_school, schools_data)
+
             
             # Save the data
-            self._save_data(schools_data)
+            self._save_data(results)
             
             return schools_data
             
@@ -254,7 +273,7 @@ class SchoolScraper:
                         school_data[field_name] = cell.text.strip()
                 
                 schools_data.append(school_data)
-                logger.debug(f"Extracted data for school: {school_data.get('centro', 'Unknown')}")
+                #logger.debug(f"Extracted data for school: {school_data.get('centro', 'Unknown')}")
                 
             except Exception as e:
                 logger.error(f"Error extracting data from row: {str(e)}")
@@ -363,7 +382,7 @@ class SchoolScraper:
                 detail_url = self.detail_url_template.format(school_code)
                 
                 # Fetch the detail page
-                response = self.session.get(
+                response = requests_session.get(
                     detail_url,
                     timeout=self.request_timeout,
                     headers={
