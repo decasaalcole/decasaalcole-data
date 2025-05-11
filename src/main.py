@@ -55,16 +55,19 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 def parse_args():
+    DEFAULT_SUBSET = os.getenv('SCHOOL_SUBSET', 0)
+    DEFAULT_THREADS = os.getenv('SCHOOL_THREADS', 1)
+
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='School data scraper')
     parser.add_argument('--local', action='store_true',
                       help='Use local files from tmp/ directory instead of making HTTP requests')
     parser.add_argument('--school-codes', type=str, nargs='+',
                       help='List of school codes to scrape (e.g., "03012591 03012592")')
-    parser.add_argument('--subset', type=int, default=0,
-                      help='Number of schools to scrape (0 for all schools)')
-    parser.add_argument('--threads', type=int, default=1,
-                        help='Number of threads to use for scraping (default: 1)')
+    parser.add_argument('--subset', type=int, default=DEFAULT_SUBSET,
+                      help=f"Number of schools to scrape ({DEFAULT_SUBSET} for all schools)")
+    parser.add_argument('--threads', type=int, default=DEFAULT_THREADS,
+                        help="Number of threads to use for scraping (default: {DEFAULT_THREADS})")
     return parser.parse_args()
 
 def main() -> None:
