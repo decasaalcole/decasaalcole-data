@@ -438,20 +438,43 @@ class SchoolScraper:
                 
                 # Extract authorized levels
                 levels = []
-                levels_table = soup.find('table', class_="fondos")
-                if levels_table:
-                    rows = levels_table.find_all('tr')[1:]  # Skip header
-                    for row in rows:
-                        cells = row.find_all('td')
-                        if len(cells) >= 5:
-                            level_info = {
-                                'nivel': cells[0].text.strip(),
-                                'unidades_autorizadas': cells[1].text.strip(),
-                                'puestos_autorizados': cells[2].text.strip(),
-                                'unidades_activas': cells[3].text.strip(),
-                                'puestos_activos': cells[4].text.strip()
-                            }
-                            levels.append(level_info)
+                levels_tables = soup.find_all('table', {'class': 'fondos'})
+                if levels_tables:
+                    for table in levels_tables:
+                        ths_table = table.find_all('th')
+                        # Look for the table with NIVELES EDUCATIVOS header
+                        if any(th.text.strip().lower() == 'nivel educativo' for th in ths_table):
+                            rows = table.find_all('tr')[1:]  # Skip header
+                            for row in rows:
+                                cells = row.find_all('td')
+                                if len(cells) >= 5:
+                                    level_info = {
+                                        'nivel': cells[0].text.strip(),
+                                        'unidades_autorizadas': cells[1].text.strip(),
+                                        'puestos_autorizados': cells[2].text.strip(),
+                                        'unidades_activas': cells[3].text.strip(),
+                                        'puestos_activos': cells[4].text.strip()
+                                    }
+                                    levels.append(level_info)
+                                elif len(cells) >= 3:
+                                    level_info = {
+                                        'nivel': cells[0].text.strip(),
+                                        'unidades_autorizadas': cells[1].text.strip(),
+                                        'puestos_autorizados': cells[2].text.strip(),
+                                        'unidades_activas': '',
+                                        'puestos_activos': ''
+                                    }
+                                    levels.append(level_info)
+                                elif len(cells) >= 2:
+                                    level_info = {
+                                        'nivel': cells[0].text.strip(),
+                                        'unidades_autorizadas': cells[1].text.strip(),
+                                        'puestos_autorizados': '',
+                                        'unidades_activas': '',
+                                        'puestos_activos': ''
+                                    }
+                                    levels.append(level_info)
+                            break  # Exit the loop once we find and process the correct table
                 if levels:
                     details['niveles_autorizados'] = levels
                 
@@ -498,4 +521,47 @@ class SchoolScraper:
             raise
         except Exception as e:
             logger.error(f"Error extracting school details: {str(e)}")
+            raise 
+
+    def scrape_specific_schools(self, school_codes: List[str]) -> List[Dict]:
+        """
+        Scrape data for specific schools by their codes.
+        
+        Args:
+            school_codes (List[str]): List of school codes to scrape
+            
+        Returns:
+            List[Dict]: List of dictionaries containing school data
+            
+        Raises:
+            Exception: If any error occurs during the scraping process
+        """
+        try:
+            schools_data = []
+            
+            for school_code in school_codes:
+                try:
+                    logger.info(f"Fetching details for school code: {school_code}")
+                    school_details = self._extract_school_data(school_code)
+                    
+                    # Add the school code to the details
+                    school_details['código'] = school_code
+                    
+                    schools_data.append(school_details)
+                    
+                    # Add delay between requests if not in local mode
+                    if not self.use_local:
+                        time.sleep(self.request_delay)
+                        
+                except Exception as e:
+                    logger.error(f"Failed to fetch details for school code {school_code}: {str(e)}")
+                    continue
+            
+            # Save the data
+            self._save_data(schools_data)
+            
+            return schools_data
+            
+        except Exception as e:
+            logger.error(f"Error during specific schools scraping: {str(e)}")
             raise 
