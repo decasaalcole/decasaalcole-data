@@ -1,8 +1,6 @@
 import os
 import logging
 import argparse
-from pathlib import Path
-from dotenv import load_dotenv
 from scraper import SchoolScraper
 
 # Create logs directory if it doesn't exist
@@ -10,7 +8,7 @@ os.makedirs('logs', exist_ok=True)
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv('LOG_LEVEL', 'INFO'),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('logs/scraper.log'),
@@ -57,12 +55,19 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 def parse_args():
+    DEFAULT_SUBSET = os.getenv('SCHOOL_SUBSET', 0)
+    DEFAULT_THREADS = os.getenv('SCHOOL_THREADS', 1)
+
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='School data scraper')
     parser.add_argument('--local', action='store_true',
                       help='Use local files from tmp/ directory instead of making HTTP requests')
     parser.add_argument('--school-codes', type=str, nargs='+',
                       help='List of school codes to scrape (e.g., "03012591 03012592")')
+    parser.add_argument('--subset', type=int, default=DEFAULT_SUBSET,
+                      help=f"Number of schools to scrape ({DEFAULT_SUBSET} for all schools)")
+    parser.add_argument('--threads', type=int, default=DEFAULT_THREADS,
+                        help="Number of threads to use for scraping (default: {DEFAULT_THREADS})")
     return parser.parse_args()
 
 def main() -> None:
@@ -87,6 +92,11 @@ def main() -> None:
         Exception: If any error occurs during the scraping process
     """
     try:
+        # Disable debug logging from some external libraries
+        logging.getLogger("requests_cache").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("requests").setLevel(logging.WARNING)
+
         # Setup directories
         setup_directories()
         
@@ -106,7 +116,7 @@ def main() -> None:
             logger.info(f"Scraping specific schools: {args.school_codes}")
             schools_data = scraper.scrape_specific_schools(args.school_codes)
         else:
-            schools_data = scraper.scrape_schools()
+            schools_data = scraper.scrape_schools(subset=args.subset, threads=args.threads)
         logger.info(f"Successfully scraped {len(schools_data)} schools")
         
     except Exception as e:
