@@ -1,0 +1,12 @@
+services:
+  postcodes:
+    build:
+      context: .
+    container_name: postcodes
+    restart: no
+    volumes:
+      - ./data:/app/data
+      - ./main.py:/app/main.py
+      - ./dcac_postcodes:/app/dcac_postcodes
+    working_dir: /app
+    entrypoint: uv run /app/main.py

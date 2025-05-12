@@ -1,0 +1,59 @@
+# a service that only runs on demand for the aria2c ommand
+services:
+  download-osm:
+    image: andrey01/aria2c
+    container_name: download-osm
+    environment:
+      - REGION=${REGION}
+    restart: no
+    volumes:
+      - ./data:/data
+    working_dir: /data
+    user: "${UID}:${GID}"
+    command: --conditional-get --allow-overwrite --split=${THREADS} https://download.geofabrik.de/europe/spain/${REGION}-latest.osm.pbf
+    profiles: ["data"]
+
+  osrm-prepare:
+    image: ghcr.io/project-osrm/osrm-backend
+    container_name: osrm-prepare
+    restart: no
+    volumes:
+      - ./data:/data
+      - ./scripts/prepare.sh:/usr/local/bin/prepare.sh
+    working_dir: /data
+    environment:
+      - REGION=${REGION}
+    user: "${UID}:${GID}"
+    command: prepare.sh ${REGION}
+    profiles: ["data"]
+
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend
+    container_name: osrm
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/data
+    working_dir: /data
+    environment:
+      - REGION=${REGION}
+    command: osrm-routed --algorithm mld /data/${REGION}-latest.osrm
+
+  travel-times:
+    build:
+      context: .
+      dockerfile: travel_times.dockerfile
+    container_name: travel-times
+    restart: no
+    depends_on:
+      - osrm
+    environment:
+      - OSRM_URL=http://osrm:5000
+      - FORCE=true
+      - THREADS=5
+    volumes:
+      - ./data:/app/data
+      - ./scripts/travel_times.py:/app/travel_times.py
+    working_dir: /app
+    entrypoint: uv run /app/travel_times.py
