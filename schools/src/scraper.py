@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Define a requests cache backend as a SQLite database in the data folder
 requests_backend = SQLiteCache('data/school_scraper_cache.sqlite')
 # Store the cached session globally to prevent multiprocessing issues
-requests_session = requests_cache.CachedSession('SchoolScrapper', backend=requests_backend, allowable_methods=['GET', 'POST'])
+requests_session = requests_cache.CachedSession('SchoolScraper', backend=requests_backend, allowable_methods=['GET', 'POST'])
 requests_session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 })
