@@ -2,7 +2,7 @@ import logging
 import argparse
 import os
 
-from .config import CARTOCIUDAD_PROVINCES_IDS, DEFAULTS
+from config import CARTOCIUDAD_PROVINCES_IDS, DEFAULTS
 
 logger = logging.getLogger("cli")
 logger_format = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"

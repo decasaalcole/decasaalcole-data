@@ -6,7 +6,7 @@ services:
     restart: no
     volumes:
       - ./data:/app/data
-      - ./main.py:/app/main.py
-      - ./dcac_postcodes:/app/dcac_postcodes
+      - ./src:/app/src
     working_dir: /app
-    entrypoint: uv run /app/main.py
+    entrypoint: python3
+    command: /app/src/main.py

@@ -4,7 +4,7 @@ import logging
 import csv
 from pyproj import Transformer
 
-from .config import STREET_NUMBERS_FIELDS
+from config import STREET_NUMBERS_FIELDS
 
 logger = logging.getLogger("extract_postcodes")
 

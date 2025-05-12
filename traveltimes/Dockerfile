@@ -18,3 +18,7 @@ RUN uv sync --frozen --no-install-project
 
 # Place executables in the environment at the front of the path
 ENV PATH="/app/.venv/bin:$PATH"
+
+ENTRYPOINT [ "python3" ]
+
+CMD [ "--help" ]

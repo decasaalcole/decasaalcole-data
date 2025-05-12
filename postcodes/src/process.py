@@ -4,11 +4,10 @@ import csv
 from multiprocessing import Pool
 from pyproj import Transformer
 
-
-from .config import CARTOCIUDAD_PROVINCES_IDS, Config, DEFAULTS
-from .download import download_dataset
-from .extract_postcodes import extract_postcodes
-from .compute_centroids import compute_centroid
+from config import CARTOCIUDAD_PROVINCES_IDS, Config, DEFAULTS
+from download import download_dataset
+from extract_postcodes import extract_postcodes
+from compute_centroids import compute_centroid
 
 logger = logging.getLogger("process")
 

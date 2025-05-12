@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 import logging
-import os
 
-from dcac_postcodes.config import CARTOCIUDAD_PROVINCES_IDS, Config
-from dcac_postcodes.cli import parse_args, logger_format
-from dcac_postcodes.process import Process
+from config import CARTOCIUDAD_PROVINCES_IDS, Config
+from cli import parse_args, logger_format
+from process import Process
 
 
 if __name__ == "__main__":

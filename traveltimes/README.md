@@ -4,7 +4,8 @@ This repo contains the resources to compute the travel times for the project.
 
 ## Requirements
 
-Docker and Docker Compose
+* Docker and Docker Compose
+* `postcodes.csv` output file from the [`postcodes`](../postcodes/) application
 
 ## Set up the routing engine
 

@@ -4,7 +4,7 @@ import csv
 from sklearn.cluster import DBSCAN
 import numpy as np
 
-from .config import CLUSTERING_PARAMETERS
+from config import CLUSTERING_PARAMETERS
 
 logger = logging.getLogger("compute_centroids")
 

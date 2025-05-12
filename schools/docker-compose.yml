@@ -14,5 +14,6 @@ services:
       - PYTHONUNBUFFERED=1
     ports:
       - "5678:5678"  # Debug port
-    # command: python -m debugpy --listen 0.0.0.0:5678 --wait-for-client src/main.py ${LOCAL_MODE:+--local}
-    command: python src/main.py ${LOCAL_MODE:+--local}
+    entrypoint: python3
+    # command: -m debugpy --listen 0.0.0.0:5678 --wait-for-client src/main.py ${LOCAL_MODE:+--local}
+    command: src/main.py ${LOCAL_MODE:+--local}

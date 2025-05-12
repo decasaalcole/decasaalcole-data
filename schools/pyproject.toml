@@ -1,0 +1,13 @@
+[project]
+name = "decasaalcole-data"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4==4.12.2",
+    "debugpy==1.8.0",
+    "lxml==4.9.3",
+    "pandas==2.1.4",
+    "python-dotenv==1.0.0",
+    "requests==2.31.0",
+    "requests-cache>=1.2.1",
+]

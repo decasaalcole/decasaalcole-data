@@ -1,9 +1,9 @@
 [project]
-name = "dcac-postcodes"
+name = "postcodes"
 version = "0.1.0"
-description = "Add your description here"
+description = "Processes Cartociudad addresses to produce a list of postcodes"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
     "fiona>=1.10.1",
     "pyproj>=3.6.1",

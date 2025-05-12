@@ -43,7 +43,6 @@ services:
   travel-times:
     build:
       context: .
-      dockerfile: travel_times.dockerfile
     container_name: travel-times
     restart: no
     depends_on:
@@ -56,4 +55,5 @@ services:
       - ./data:/app/data
       - ./scripts/travel_times.py:/app/travel_times.py
     working_dir: /app
-    entrypoint: uv run /app/travel_times.py
+    entrypoint: python3
+    command: /app/travel_times.py
