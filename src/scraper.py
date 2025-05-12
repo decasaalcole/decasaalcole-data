@@ -278,6 +278,7 @@ class SchoolScraper:
                     logger.warning(f"⚠  Only processingc {len(schools_data)} schools")
                 
                 # Use map to process each school in parallel
+                logger.info(f"Processing {len(schools_data)} schools in parallel with {threads} threads")
                 results = pool.map(self._process_school, schools_data)
 
             
@@ -401,7 +402,8 @@ class SchoolScraper:
             
             # Save as JSON with minimal whitespace
             with open(output_file, 'w', encoding=encoding) as f:
-                json.dump(optimized_data, f, ensure_ascii=False, separators=(',', ':'))
+                indent = None if len(optimized_data) > 100 else 4
+                json.dump(optimized_data, f, ensure_ascii=False, separators=(',', ':'), indent=indent)
             logger.info(f"Saved optimized data to {output_file} in JSON format with {encoding} encoding")
         else:
             raise ValueError(f"Unsupported output format: {output_format}. Supported formats are CSV and JSON")
@@ -485,7 +487,7 @@ class SchoolScraper:
                     if 'Código:' in text:
                         details['código'] = text.replace('Código:', '').strip()
                     elif 'Régimen:' in text:
-                        details['rég.'] = text.replace('Régimen:', '').strip()
+                        details['rég.'] = text.replace('Régimen:', '').strip().replace('\xa0', '')
                     elif 'CIF:' in text:
                         details['cif'] = text.replace('CIF:', '').strip()
                 
@@ -522,12 +524,12 @@ class SchoolScraper:
                                     lat_row = rows[row_index + 1]
                                     # Get the cell at the same index in the next row
                                     lat_cell = lat_row.find_all('td')[index]
-                                    details['lat'] = lat_cell.text.strip()
+                                    details['lat'] = lat_cell.text.strip().replace(',', '.')
                                 elif 'long:' in label:
                                     long_row = rows[row_index + 1]
                                     # Get the cell at the same index in the next row
                                     long_cell = long_row.find_all('td')[index]
-                                    details['long'] = long_cell.text.strip()
+                                    details['long'] = long_cell.text.strip().replace(',', '.')
                 else:
                     logger.warning("No contact details div found")
                 
@@ -618,6 +620,7 @@ class SchoolScraper:
                 
             except Exception as e:
                 logger.warning(f"Error extracting specific field: {str(e)}")
+                logger.exception(e)
                 # Continue with what we have extracted so far
             
             logger.debug(f"Extracted {len(details)} details from school page")
@@ -653,6 +656,9 @@ class SchoolScraper:
                     
                     # Add the school code to the details
                     school_details['código'] = school_code
+
+                    # Enrich the details
+                    school_details = self._process_school(school_details)
                     
                     schools_data.append(school_details)
                     
