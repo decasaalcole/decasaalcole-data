@@ -1,0 +1,12 @@
+services:
+  postcodes:
+    build:
+      context: .
+    container_name: postcodes
+    restart: no
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+    working_dir: /app
+    entrypoint: python3
+    command: /app/src/main.py
