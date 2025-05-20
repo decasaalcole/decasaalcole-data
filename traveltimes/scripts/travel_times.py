@@ -1,5 +1,5 @@
 """
-This is a script to traverse a given CSV file with latitude and lonitude
+This is a script to traverse a given CSV file with latitude and longitude
 coordinates and sends a request to a local OSRM API server to get the
 duration and distance of the route between a given origin and the rest of
 destinations from the CSV file. It stores the results in a new CSV file with
@@ -11,6 +11,7 @@ import os
 import csv
 import argparse
 import json
+import time
 
 import requests
 from requests_cache import SQLiteCache, CachedSession
@@ -426,10 +427,11 @@ if __name__ == "__main__":
     # Store all the stats in a json file
     import json
 
-    stats_file = args.output.replace(".csv", ".stats.json")
+    stats_file = args.output.replace(".csv", ".metadata.json")
     with open(stats_file, "w") as f:
         json.dump(
             {
+                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
                 "postal_codes": len(postal_codes),
                 "travel_times": len(results),
                 "time_diffs": {

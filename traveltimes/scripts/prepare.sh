@@ -40,7 +40,7 @@ if [ -z "$OSM_PBF_MD5" ]; then
 fi
 
 # Write the OSM PBF file information to a JSON file
-OSM_PBF_INFO_FILE="/data/travel_times_osm_pbf.json"
+OSM_PBF_INFO_FILE="/data/travel_times_osm_pbf.metadata.json"
 cat <<EOF > $OSM_PBF_INFO_FILE
 {
   "timestamp": "$OSM_PBF_TIMESTAMP",
@@ -73,7 +73,7 @@ if [ -z "$OSRM_FILES_SIZE" ]; then
 fi
 
 # Store the OSRM results in a JSON file
-OSRM_INFO_FILE="/data/travel_times_osrm.json"
+OSRM_INFO_FILE="/data/travel_times_osrm.metadata.json"
 cat <<EOF > $OSRM_INFO_FILE
 {
   "timestamp": "$OSM_PBF_TIMESTAMP",

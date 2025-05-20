@@ -283,7 +283,13 @@ class SchoolScraper:
 
             
             # Save the data
-            self._save_data([r for r in results if r is not None])
+            final_results = [r for r in results if r is not None]
+            if not final_results:
+                logger.warning("No valid data to save")
+                return []
+            logger.info(f"Saving data for {len(final_results)} schools")
+            self._save_data(final_results)
+            self._save_metadata(final_results)
             
             return schools_data
             
@@ -366,13 +372,13 @@ class SchoolScraper:
         logger.info(f"Using encoding: {encoding}")
         
         if output_format == 'CSV':
-            output_file = os.path.join(self.output_dir, 'schools_list.csv')
+            output_file = os.path.join(self.output_dir, 'schools.csv')
             # Convert to DataFrame and save
             df = pd.DataFrame(data)
             df.to_csv(output_file, index=False, encoding=encoding)
             logger.info(f"Saved data to {output_file} in CSV format with {encoding} encoding")
         elif output_format == 'JSON':
-            output_file = os.path.join(self.output_dir, 'schools_list.json')
+            output_file = os.path.join(self.output_dir, 'schools.json')
             
             # Clean and optimize data
             optimized_data = []
@@ -407,6 +413,27 @@ class SchoolScraper:
             logger.info(f"Saved optimized data to {output_file} in JSON format with {encoding} encoding")
         else:
             raise ValueError(f"Unsupported output format: {output_format}. Supported formats are CSV and JSON")
+
+    def _save_metadata(self, data: List[Dict]) -> None:
+        """
+        Save metadata about the scraped data.
+        
+        Args:
+            data (List[Dict]): List of dictionaries containing school data
+            
+        Environment Variables:
+            METADATA_FILE: File to save metadata
+        """
+        metadata_file = os.path.join(self.output_dir, 'schools.metadata.json')
+        metadata = {
+            'total_schools': len(data),
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=4)
+        logger.info(f"Saved metadata to {metadata_file}")
+
 
     def _extract_school_data(self, school_code: str) -> Dict:
         """
