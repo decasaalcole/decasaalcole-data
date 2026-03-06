@@ -1,707 +1,359 @@
 import logging
 import os
-from typing import List, Dict, Optional
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
-from pathlib import Path
 import json
 import time
+from typing import List, Dict, Optional
+from base64 import b64encode
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from multiprocessing import Pool
-
-import requests_cache
-from requests_cache.backends.sqlite import SQLiteCache
+import requests
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Define a requests cache backend as a SQLite database in the data folder
-requests_backend = SQLiteCache('data/school_scraper_cache.sqlite')
-# Store the cached session globally to prevent multiprocessing issues
-requests_session = requests_cache.CachedSession('SchoolScraper', backend=requests_backend, allowable_methods=['GET', 'POST'])
-requests_session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-})
+API_BASE_URL = "https://xacen-backend.gva.es/xacen-backend/api/v1/"
+API_USER = "XacenFront"
+API_PASS = "APzFiPRZotdrIL4bVpBgvA=="
+
+DETAIL_ENDPOINTS = [
+    ("niveles", "centro/nivelesAutorizados"),
+    ("horario", "centro/jornadas"),
+    ("info", "centro/informacionAdicional"),
+    ("servicios", "simbolos/servicios"),
+    ("programaLinguistico", "centro/programaLinguistico"),
+]
+
 
 class SchoolScraper:
     """
-    A web scraper for collecting school information from the Valencian Community's education portal.
-    
-    This class handles:
-    - Fetching school data from the education portal
-    - Extracting detailed information for each school
-    - Processing and structuring the data
-    - Saving the results in CSV or JSON format
-    
-    Attributes:
-        use_local (bool): Whether to use local HTML files instead of making HTTP requests
-        base_url (str): URL for the main search page
-        detail_url_template (str): Template for school detail URLs
-        request_timeout (int): Timeout for HTTP requests in seconds
-        max_retries (int): Maximum number of retries for failed requests
-        output_dir (str): Directory to save output files
-        request_delay (float): Delay between requests in seconds
-        session (requests.Session): HTTP session for making requests
+    Scraper for school data from the Valencian Community's education portal.
+
+    Authenticates against the xacen-backend API with a public JWT flow,
+    fetches the paginated school list, then enriches each school with
+    detail endpoints (levels, schedule, services, etc.).
     """
-    
-    def __init__(self, use_local: bool = False):
-        """
-        Initialize the SchoolScraper.
-        
-        Args:
-            use_local (bool): Whether to use local HTML files instead of making HTTP requests
-            
-        Environment Variables:
-            CONSULTABASE_URL: URL for the main search page
-            CONSULTA_CENTRO_URL: Base URL for school detail pages
-            REQUEST_TIMEOUT: Timeout for HTTP requests
-            MAX_RETRIES: Maximum number of retries
-            OUTPUT_DIR: Directory for output files
-            REQUEST_DELAY: Delay between requests
-        """
-        self.use_local = use_local
-        self.base_url = os.getenv('CONSULTABASE_URL', 'https://ceice.gva.es/abc/i_guiadecentros/es/consulta01.asp')
-        base_detail_url = os.getenv('CONSULTA_CENTRO_URL', 'https://ceice.gva.es/abc/i_guiadecentros/es/centro.asp')
-        self.detail_url_template = f"{base_detail_url}?codi={{}}"
-        self.request_timeout = int(os.getenv('REQUEST_TIMEOUT', '30'))
-        self.max_retries = int(os.getenv('MAX_RETRIES', '3'))
-        self.output_dir = os.getenv('OUTPUT_DIR', './data')
-        self.request_delay = float(os.getenv('REQUEST_DELAY', '1.0'))
-    
-    def _get_page_content(self) -> str:
-        """
-        Get the page content either from local file or URL.
-        
-        In local mode, reads from a local HTML file.
-        In normal mode, makes a POST request to the education portal.
-        
-        Returns:
-            str: The HTML content of the page
-            
-        Raises:
-            FileNotFoundError: If local file doesn't exist in local mode
-            requests.exceptions.RequestException: If HTTP request fails
-            ValueError: If response validation fails
-        """
-        if self.use_local:
-            logger.info("Local mode enabled, using local file")
-            local_file = Path('tmp/consulta01.html')
-            if not local_file.exists():
-                raise FileNotFoundError(f"Local file not found: {local_file}")
-            
-            # Get encoding from environment variable, default to utf-8
-            encoding = os.getenv('ENCODING', 'utf-8')
-            logger.info(f"Using encoding: {encoding}")
-            
-            with open(local_file, 'r', encoding=encoding) as f:
-                return f.read()
-        else:
+
+    def __init__(self):
+        self.api_base = os.getenv("API_BASE_URL", API_BASE_URL)
+        self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", "30"))
+        self.max_retries = int(os.getenv("MAX_RETRIES", "3"))
+        self.output_dir = os.getenv("OUTPUT_DIR", "./data")
+        self.request_delay = float(os.getenv("REQUEST_DELAY", "0"))
+        self.idioma = os.getenv("IDIOMA", "es")
+
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": "https://ceice.gva.es",
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64; rv:132.0) "
+                    "Gecko/20100101 Firefox/132.0"
+                ),
+            }
+        )
+
+        self._token: Optional[str] = None
+        self._token_expiry: float = 0
+
+    def _authenticate(self):
+        credentials = b64encode(f"{API_USER}:{API_PASS}".encode()).decode()
+        response = self.session.get(
+            f"{self.api_base}user",
+            headers={"Authorization": f"Basic {credentials}"},
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        self._token = data["token"]
+        # Refresh 1 minute before expiry
+        self._token_expiry = time.time() + (data["tiempoExpiracion"] - 1) * 60
+        self.session.headers["Authorization"] = self._token
+        logger.info("Authenticated with xacen-backend API")
+
+    def _ensure_auth(self):
+        if self._token is None or time.time() >= self._token_expiry:
+            self._authenticate()
+
+    def _api_get(self, endpoint: str, params: Optional[dict] = None):
+        """Authenticated GET request with retry and token refresh on 403."""
+        self._ensure_auth()
+        url = f"{self.api_base}{endpoint}"
+
+        for attempt in range(self.max_retries):
             try:
-                logger.info(f"Fetching page from {self.base_url}")
-                payload = {
-                    "opcion": "on",
-                    "cpro": "%",
-                    "cregime": "%",
-                    "ter1": "",
-                    "tipo_consulta": "F_DENO_LOCALIDAD(A.COD_PROVINCIA, A.COD_MUNI, A.COD_ECOL, A.COD_ESIN, NULL,1)",
-                    "tipo_consulta2": "F_DENO_LOCALIDAD(A.COD_PROVINCIA, A.COD_MUNI, A.COD_ECOL, A.COD_ESIN, NULL,2)",
-                    "prov": "%",
-                    "reg": "%",
-                    "t": "3",
-                    "aceptar": "Buscar"
-                }
-                response = requests_session.post(
-                    self.base_url,
-                    data=payload,
-                    timeout=self.request_timeout,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.5',
-                        'Connection': 'keep-alive',
-                        'Upgrade-Insecure-Requests': '1',
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Referer': self.base_url
-                    }
+                resp = self.session.get(
+                    url, params=params, timeout=self.request_timeout
                 )
-                
-                # Check if the request was successful
-                response.raise_for_status()
-                
-                # Check if we got HTML content
-                if not response.headers.get('content-type', '').startswith('text/html'):
-                    raise ValueError(f"Expected HTML content, got {response.headers.get('content-type')}")
-                
-                # Check if the content is not empty
-                if not response.text.strip():
-                    raise ValueError("Received empty response")
-                
-                # Write the content in the tmp folder
-                os.makedirs('tmp', exist_ok=True)
-                with open('tmp/consulta01.html', 'w', encoding='utf-8') as f:
-                    f.write(response.text)
-                    logger.debug("Saved page content to tmp/consulta01.html")
-
-                
-                # Check if the content contains the expected table structure
-                soup = BeautifulSoup(response.text, 'lxml')
-                if not soup.find('table'):
-                    raise ValueError("Page content does not contain expected table structure")
-                
-                logger.info("Successfully fetched and validated page content")
-                return response.text
-                
+                if resp.status_code == 403:
+                    logger.debug("Got 403, refreshing token")
+                    self._authenticate()
+                    resp = self.session.get(
+                        url, params=params, timeout=self.request_timeout
+                    )
+                resp.raise_for_status()
+                return resp.json()
             except requests.exceptions.RequestException as e:
-                logger.error(f"Failed to fetch page: {str(e)}")
-                raise
-            except ValueError as e:
-                logger.error(f"Page content validation failed: {str(e)}")
-                raise
-    
-    def _process_school(self, school):
-        """
-        Internal method to process each school in a multiprocessing pool.
+                if attempt == self.max_retries - 1:
+                    raise
+                wait = 2 ** attempt
+                logger.warning(
+                    f"Retry {attempt + 1}/{self.max_retries} for {endpoint}: {e} "
+                    f"(waiting {wait}s)"
+                )
+                time.sleep(wait)
 
-        Args:
-            school (Dict): Dictionary containing basic school information
-        Returns:
-            Dict: A new dictionary containing enriched school information
+    # ------------------------------------------------------------------
+    # School list
+    # ------------------------------------------------------------------
 
-        """
-        if 'código' in school:
+    def _fetch_all_schools(self, limit: int = 0) -> List[Dict]:
+        all_schools: List[Dict] = []
+        page = 0
+
+        while True:
+            logger.info(f"Fetching school list page {page}...")
+            data = self._api_get(
+                "guiadecentros/listaCentrosAulariosLibre",
+                params={
+                    "idioma": self.idioma,
+                    "textoBusqueda": "",
+                    "numLlamada": page,
+                },
+            )
+
+            schools = data.get("listaCentros", [])
+            all_schools.extend(schools)
+
+            if data.get("SinDatos", True) or not schools:
+                break
+            if limit > 0 and len(all_schools) >= limit:
+                break
+            page += 1
+
+            if self.request_delay > 0:
+                time.sleep(self.request_delay)
+
+        logger.info(f"Fetched {len(all_schools)} schools in {page + 1} pages")
+        return all_schools
+
+    # ------------------------------------------------------------------
+    # School details
+    # ------------------------------------------------------------------
+
+    def _fetch_school_details(self, code: str) -> Dict:
+        params = {"codCentro": code, "idioma": self.idioma}
+        details = self._api_get("centro/datosGenerales", params)
+
+        for key, endpoint in DETAIL_ENDPOINTS:
             try:
-                logger.debug(f"Fetching details for school: {school.get('centro', 'Unknown')}, code: {school['código']}")
-                school_details = self._extract_school_data(school['código'])
-                result = school.copy()
-                result.update(school_details)
+                result = self._api_get(endpoint, params)
+                if not result:
+                    continue
 
-                # Remove duplicated keys
-                if 'código' in result:
-                    result['codigo'] = result.pop('código')
-                if 'rég.' in result:
-                    result['reg'] = result.pop('rég.')
-                if 'dirección' in result:
-                    result['dir'] = result.pop('dirección')
-                if 'teléfono' in result:
-                    result['tel'] = result.pop('teléfono')
-                if 'localidad' in result:
-                    localidad = result.pop('localidad')
-                    # if a number is found in localidad, extract it
-                    if any(char.isdigit() for char in localidad):
-                        muni_parts = localidad.split(' - ')
-                        if len(muni_parts) < 2:
-                            logger.warning(f"Unexpected format for localidad: {localidad}")
-                            result['muni'] = localidad
-                            result['cp'] = ''
-                        else:
-                            result['cp'] = muni_parts[0]
-                            result['muni'] = muni_parts[1]
-                    else:
-                        result['muni'] = localidad
+                if key == "servicios":
+                    for item in result:
+                        item.pop("icono", None)
 
-                # Rename some keys
-                if 'centro' in result:
-                    result['denGenEs'] = result.pop('centro')
-                if 'nombre' in result:
-                    result['deno'] = result.pop('nombre')
-                
-                # Some postprocessing
-                if 'deno' in result:
-                    result['deno'] = result['deno'].replace('  ', ' ').strip()
-                    result['deno'] = result['deno'].replace('\n', ' ').strip()
-                
-                # Sort the keys in the result dictionary based on the keys
-                sorted_result = {k: result[k] for k in sorted(result.keys())}    
-
-                # Add delay between requests if not in local mode
-                if not self.use_local:
-                    time.sleep(self.request_delay)
-                
-                return sorted_result 
-                    
+                details[key] = result
             except Exception as e:
-                logger.error(f"Failed to fetch details for school {school.get('código')} - {school.get('centro', 'Unknown')}: {str(e)}")
-                # Print also the stack trace
-                logger.exception(e)
-                return None
+                logger.warning(f"Failed to fetch {key} for {code}: {e}")
+
+        return details
+
+    @staticmethod
+    def _transform_to_legacy_format(details: Dict) -> Dict:
+        """Map API response fields to the legacy output schema."""
+        result: Dict = {}
+
+        result["cif"] = details.get("cif", "")
+        result["codigo"] = details.get("codCentro", "")
+        result["com"] = details.get("denomComarca", "")
+        result["cp"] = details.get("cp", "")
+        result["denGenEs"] = details.get("denomCentro", "")
+        result["deno"] = details.get("denomGenerica", "")
+        result["dir"] = details.get("direccion", "")
+        result["email"] = details.get("email", "")
+
+        # horario: already a list of strings from the API
+        result["horario"] = details.get("horario", [])
+
+        # info: API returns [{informacion, enlace}] → flatten to list of strings
+        raw_info = details.get("info", [])
+        if raw_info and isinstance(raw_info[0], dict):
+            result["info"] = [
+                item["informacion"]
+                for item in raw_info
+                if item.get("informacion")
+            ]
+        else:
+            result["info"] = raw_info
+
+        # inst: API returns servicios [{denominacion, ...}] → list of strings
+        raw_servicios = details.get("servicios", [])
+        result["inst"] = [
+            item["denominacion"]
+            for item in raw_servicios
+            if item.get("denominacion")
+        ]
+
+        result["lat"] = details.get("latitud", "")
+        result["long"] = details.get("longitud", "")
+        result["muni"] = details.get("localidad", "")
+
+        # niveles: rename fields to match legacy format
+        raw_niveles = details.get("niveles", [])
+        result["niveles"] = [
+            {
+                "nivel": n.get("denomNivel", ""),
+                "uni_auto": str(n.get("unidadesAutorizadas", "")),
+                "pues_auto": str(n.get("puestosAutorizados", "")),
+                "uni_act": str(n.get("unidadesActivas", "")),
+                "pues_act": str(n.get("puestosActivos", "")),
+            }
+            for n in raw_niveles
+        ]
+
+        result["reg"] = details.get("regimen", "").upper()
+        result["tel"] = details.get("telefono", "")
+        result["titular"] = details.get("titular", "")
+
+        return result
+
+    def _process_school(self, school: Dict) -> Optional[Dict]:
+        code = school.get("codCentro")
+        if not code:
+            return None
+        try:
+            details = self._fetch_school_details(code)
+            if self.request_delay > 0:
+                time.sleep(self.request_delay)
+            return self._transform_to_legacy_format(details)
+        except Exception as e:
+            logger.error(f"Failed to process school {code}: {e}")
+            logger.exception(e)
+            return None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def scrape_schools(self, subset: int = 0, threads: int = 1) -> List[Dict]:
-        """
-        Main method to scrape school data.
-        
-        This method:
-        1. Fetches the initial page with the list of schools
-        2. Extracts basic information for each school
-        3. Fetches and extracts detailed information for each school
-        4. Saves the collected data
+        schools = self._fetch_all_schools(limit=subset)
 
-        Args:
-            subset (int): Number of schools to scrape (0 for all schools)
-            threads (int): Number of threads to use for scraping (default: 1)
-        
-        Returns:
-            List[Dict]: List of dictionaries containing school data
-            
-        Raises:
-            Exception: If any error occurs during the scraping process
-        """
-        try:
-            # Get page content
-            logger.info("Fetching page content...")
-            html_content = self._get_page_content()
-            
-            # Parse with BeautifulSoup
-            soup = BeautifulSoup(html_content, 'lxml')
-            
-            # Find the outer table
-            outer_table = soup.find('table')
-            if not outer_table:
-                raise ValueError("No outer table found on the page")
-            
-            # Find all inner tables
-            inner_tables = outer_table.find_all('table')
-            if not inner_tables:
-                raise ValueError("No inner tables found")
-            
-            # Get the first inner table (the one we want)
-            target_table = inner_tables[0]
-            logger.info("Found target table for school data")
-            
-            # Extract data from the table
-            schools_data = self._extract_table_data(target_table)
-            
-            # Extract detailed information for each school using a multiprocessing pool
-            with Pool(processes=threads) as pool:
-                # Retrieving only a subset of schools if specified
-                if subset > 0:
-                    schools_data = schools_data[:subset]
-                    logger.warning(f"⚠  Only processingc {len(schools_data)} schools")
-                
-                # Use map to process each school in parallel
-                logger.info(f"Processing {len(schools_data)} schools in parallel with {threads} threads")
-                results = pool.map(self._process_school, schools_data)
+        if subset > 0:
+            schools = schools[:subset]
+            logger.warning(f"⚠  Only processing {len(schools)} schools (subset)")
 
-            
-            # Save the data
-            final_results = [r for r in results if r is not None]
-            if not final_results:
-                logger.warning("No valid data to save")
-                return []
-            logger.info(f"Saving data for {len(final_results)} schools")
-            self._save_data(final_results)
-            self._save_metadata(final_results)
-            
-            return schools_data
-            
-        except Exception as e:
-            logger.error(f"Error during scraping: {str(e)}")
-            raise
-    
-    def _extract_table_data(self, table) -> List[Dict]:
-        """
-        Extract data from the schools table.
-        
-        Args:
-            table: BeautifulSoup table object containing school data
-            
-        Returns:
-            List[Dict]: List of dictionaries containing basic school information
-            
-        Raises:
-            ValueError: If the table structure is invalid
-        """
-        schools_data = []
-        
-        # Get all rows including header
-        rows = table.find_all('tr')
-        if not rows:
-            raise ValueError("No rows found in the table")
-        
-        # Extract header row and clean field names
-        header_cells = rows[0].find_all('td')
-        field_names = [cell.text.strip().lower().replace(' ', '_') for cell in header_cells]
-        logger.info(f"Extracted field names: {field_names}")
-        
-        # Process data rows (skip header)
-        for row in rows[1:]:
-            try:
-                # Extract cells
-                cells = row.find_all('td')
-                if len(cells) != len(field_names):
-                    logger.warning(f"Row has {len(cells)} cells, expected {len(field_names)}")
-                    continue
-                
-                # Create school data dictionary using field names
-                school_data = {}
-                for field_name, cell in zip(field_names, cells):
-                    school_data[field_name] = cell.text.strip()
-                
-                schools_data.append(school_data)
-                #logger.debug(f"Extracted data for school: {school_data.get('centro', 'Unknown')}")
-                
-            except Exception as e:
-                logger.error(f"Error extracting data from row: {str(e)}")
-                continue
-        
-        logger.info(f"Successfully extracted data for {len(schools_data)} schools")
-        return schools_data
-    
-    def _save_data(self, data: List[Dict]) -> None:
-        """
-        Save the scraped data to a file.
-        
-        Args:
-            data (List[Dict]): List of dictionaries containing school data
-            
-        Environment Variables:
-            OUTPUT_FORMAT: Format to save the data (CSV or JSON)
-            ENCODING: File encoding to use
-            
-        Raises:
-            ValueError: If the output format is not supported
-            OSError: If file writing fails
-        """
-        os.makedirs(self.output_dir, exist_ok=True)
-        
-        # Get output format from environment variable, default to CSV
-        output_format = os.getenv('OUTPUT_FORMAT', 'CSV').upper()
-        # Get encoding from environment variable, default to utf-8
-        encoding = os.getenv('ENCODING', 'utf-8')
-        
-        logger.info(f"Using output format: {output_format}")
-        logger.info(f"Using encoding: {encoding}")
-        
-        if output_format == 'CSV':
-            output_file = os.path.join(self.output_dir, 'schools.csv')
-            # Convert to DataFrame and save
-            df = pd.DataFrame(data)
-            df.to_csv(output_file, index=False, encoding=encoding)
-            logger.info(f"Saved data to {output_file} in CSV format with {encoding} encoding")
-        elif output_format == 'JSON':
-            output_file = os.path.join(self.output_dir, 'schools.json')
-            
-            # Clean and optimize data
-            optimized_data = []
-            for school in data:
-                # Remove empty values and detail_url
-                cleaned_school = {
-                    k: v for k, v in school.items() 
-                    if v and k != 'detail_url' and v != [] and v != {}
-                }
-                
-                # Optimize arrays removing empty properties
-                if 'inst' in cleaned_school:
-                    cleaned_school['inst'] = [i for i in cleaned_school['inst'] if i]
-                if 'horario' in cleaned_school:
-                    cleaned_school['horario'] = [h for h in cleaned_school['horario'] if h]
-                if 'info' in cleaned_school:
-                    cleaned_school['info'] = [i for i in cleaned_school['info'] if i]
-                
-                # Optimize nested structures
-                if 'niveles' in cleaned_school:
-                    cleaned_school['niveles'] = [
-                        {k: v for k, v in level.items() if v}
-                        for level in cleaned_school['niveles']
-                    ]
-                
-                optimized_data.append(cleaned_school)
-            
-            # Save as JSON with minimal whitespace
-            with open(output_file, 'w', encoding=encoding) as f:
-                indent = None if len(optimized_data) > 100 else 4
-                json.dump(optimized_data, f, ensure_ascii=False, separators=(',', ':'), indent=indent)
-            logger.info(f"Saved optimized data to {output_file} in JSON format with {encoding} encoding")
+        logger.info(
+            f"Fetching details for {len(schools)} schools "
+            f"with {threads} thread(s)..."
+        )
+
+        results: List[Dict] = []
+
+        if threads <= 1:
+            for i, school in enumerate(schools):
+                result = self._process_school(school)
+                if result:
+                    results.append(result)
+                if (i + 1) % 50 == 0:
+                    logger.info(f"Progress: {i + 1}/{len(schools)}")
         else:
-            raise ValueError(f"Unsupported output format: {output_format}. Supported formats are CSV and JSON")
+            with ThreadPoolExecutor(max_workers=threads) as pool:
+                futures = {
+                    pool.submit(self._process_school, s): s for s in schools
+                }
+                for i, future in enumerate(as_completed(futures)):
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"Progress: {i + 1}/{len(schools)}")
 
-    def _save_metadata(self, data: List[Dict]) -> None:
-        """
-        Save metadata about the scraped data.
-        
-        Args:
-            data (List[Dict]): List of dictionaries containing school data
-            
-        Environment Variables:
-            METADATA_FILE: File to save metadata
-        """
-        metadata_file = os.path.join(self.output_dir, 'schools.metadata.json')
-        metadata = {
-            'total_schools': len(data),
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, ensure_ascii=False, indent=4)
-        logger.info(f"Saved metadata to {metadata_file}")
+        if not results:
+            logger.warning("No valid data to save")
+            return []
 
-
-    def _extract_school_data(self, school_code: str) -> Dict:
-        """
-        Extract detailed data from a school's detail page.
-        
-        Args:
-            school_code (str): The code of the school to fetch details for
-            
-        Returns:
-            Dict: Dictionary containing detailed school information
-            
-        Raises:
-            FileNotFoundError: If local file doesn't exist in local mode
-            requests.exceptions.RequestException: If HTTP request fails
-            Exception: If any error occurs during data extraction
-        """
-        try:
-            if self.use_local:
-                logger.info("Local mode enabled, using local file")
-
-                # Check if the local file exists
-                local_file = Path(f'tmp/centro_{school_code}.html')
-                # If the file doesn't exist, use a default file for testing
-                if not local_file.exists():
-                    local_file = Path('tmp/centro_03012591.html')
-                
-                # Raise an error if the file doesn't exist
-                if not local_file.exists():
-                    raise FileNotFoundError(f"Local file not found: {local_file}")
-                
-                # Get encoding from environment variable, default to utf-8
-                encoding = os.getenv('ENCODING', 'utf-8')
-                logger.info(f"Using encoding: {encoding}")
-                
-                with open(local_file, 'r', encoding=encoding) as f:
-                    html_content = f.read()
-            else:
-                # Construct the detail URL
-                detail_url = self.detail_url_template.format(school_code)
-                
-                # Fetch the detail page
-                response = requests_session.get(
-                    detail_url,
-                    timeout=self.request_timeout,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.5',
-                        'Connection': 'keep-alive',
-                        'Upgrade-Insecure-Requests': '1'
-                    }
-                )
-                response.raise_for_status()
-                html_content = response.text
-
-                # Write the content in the tmp folder
-                os.makedirs('tmp', exist_ok=True)
-                with open(f'tmp/centro_{school_code}.html', 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                logger.debug(f"Saved detail page to tmp/centro_{school_code}.html")
-            
-            # Parse the detail page
-            soup = BeautifulSoup(html_content, 'lxml')
-            
-            # Initialize the details dictionary
-            details = {}
-            
-            try:
-                # Extract basic information
-                name_cell = soup.find('td', bgcolor="#EBEBEB", colspan="2")
-                if name_cell:
-                    details['nombre'] = name_cell.find('span', class_="Estilo1").text.strip()
-                
-                # Extract code and type
-                cells = soup.find_all('td', bgcolor="#EBEBEB")
-                for cell in cells:
-                    text = cell.text.strip()
-                    if 'Código:' in text:
-                        details['código'] = text.replace('Código:', '').strip()
-                    elif 'Régimen:' in text:
-                        details['rég.'] = text.replace('Régimen:', '').strip().replace('\xa0', '')
-                    elif 'CIF:' in text:
-                        details['cif'] = text.replace('CIF:', '').strip()
-                
-                # Extract contact information
-                # Find the third table inside a named div
-                outer_div = soup.find_all('div', {'class': 'nivelCentro'})
-                if outer_div:
-                    # Find the tables inside the div
-                    tables = outer_div[0].find_all('table')
-                    if tables and len(tables) >= 3:
-                        # Get the third table where the contact details are
-                        table = tables[2]
-                        # Get the rows and iterate them to find cells with desired labels
-                        rows = table.find_all('tr')
-                        for row_index, row in enumerate(rows):
-                            # Find all cells in the row
-                            cells = row.find_all('td')
-
-                            for index, cell in enumerate(cells):
-                                label = cell.text.strip().lower()
-                                if 'dirección:' in label:
-                                    details['dirección'] = cells[index + 1].text.strip()
-                                elif 'teléfono:' in label:
-                                    details['tel'] = cells[index + 1].text.strip()
-                                elif 'e-correo:' in label:
-                                    details['email'] = cells[index + 1].text.strip()
-                                elif 'localidad:' in label:
-                                    details['muni'] = cells[index + 1].text.strip()
-                                elif 'comarca:' in label:
-                                    details['com'] = cells[index + 1].text.strip()
-                                elif 'titular:' in label:
-                                    details['titular'] = cells[index + 1].text.strip()
-                                elif 'lat:' in label:
-                                    lat_row = rows[row_index + 1]
-                                    # Get the cell at the same index in the next row
-                                    lat_cell = lat_row.find_all('td')[index]
-                                    details['lat'] = lat_cell.text.strip().replace(',', '.')
-                                elif 'long:' in label:
-                                    long_row = rows[row_index + 1]
-                                    # Get the cell at the same index in the next row
-                                    long_cell = long_row.find_all('td')[index]
-                                    details['long'] = long_cell.text.strip().replace(',', '.')
-                else:
-                    logger.warning("No contact details div found")
-                
-                # Extract coordinates
-
-
-                # Extract facilities
-                facilities = []
-                facility_icons = soup.find_all('img', title=True)
-                for icon in facility_icons:
-                    if icon.get('title'):
-                        facilities.append(icon['title'])
-                if facilities:
-                    details['inst'] = facilities
-                
-                # Extract authorized levels
-                levels = []
-                levels_tables = soup.find_all('table', {'class': 'fondos'})
-                if levels_tables:
-                    for table in levels_tables:
-                        ths_table = table.find_all('th')
-                        # Look for the table with NIVELES EDUCATIVOS header
-                        if any(th.text.strip().lower() == 'nivel educativo' for th in ths_table):
-                            rows = table.find_all('tr')[1:]  # Skip header
-                            for row in rows:
-                                cells = row.find_all('td')
-                                if len(cells) >= 5:
-                                    level_info = {
-                                        'nivel': cells[0].text.strip(),
-                                        'uni_auto': cells[1].text.strip(),
-                                        'pues_auto': cells[2].text.strip(),
-                                        'uni_act': cells[3].text.strip(),
-                                        'pues_act': cells[4].text.strip()
-                                    }
-                                    levels.append(level_info)
-                                elif len(cells) >= 3:
-                                    level_info = {
-                                        'nivel': cells[0].text.strip(),
-                                        'uni_auto': cells[1].text.strip(),
-                                        'pues_auto': cells[2].text.strip(),
-                                        'uni_act': '',
-                                        'pues_act': ''
-                                    }
-                                    levels.append(level_info)
-                                elif len(cells) >= 2:
-                                    level_info = {
-                                        'nivel': cells[0].text.strip(),
-                                        'uni_auto': cells[1].text.strip(),
-                                        'pues_auto': '',
-                                        'uni_act': '',
-                                        'pues_act': ''
-                                    }
-                                    levels.append(level_info)
-                            break  # Exit the loop once we find and process the correct table
-                if levels:
-                    details['niveles'] = levels
-                
-                # Extract schedule
-                schedule_section = soup.find('div', id="secc152")
-                if schedule_section:
-                    schedule_items = schedule_section.find_all('li')
-                    if schedule_items:
-                        # Filter to only keep items containing schedule-related keywords
-                        schedule_keywords = {
-                            "jornada",
-                            "tarde",
-                            "mañana",
-                            "horario",
-                            "entrada",
-                            "salida",
-                            "hora",
-                            "h."
-                        }
-                        schedule = [
-                            item.text.strip() 
-                            for item in schedule_items 
-                            if any(keyword in item.text.strip().lower() for keyword in schedule_keywords)
-                        ]
-                        if schedule:
-                            details['horario'] = schedule
-                
-                # Extract additional information
-                info_section = soup.find('div', id="secc16")
-                if info_section:
-                    info_items = info_section.find_all('td')
-                    if info_items:
-                        details['info'] = [item.text.strip() for item in info_items if item.text.strip()]
-                
-            except Exception as e:
-                logger.warning(f"Error extracting specific field: {str(e)}")
-                logger.exception(e)
-                # Continue with what we have extracted so far
-            
-            logger.debug(f"Extracted {len(details)} details from school page")
-            return details
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to fetch school details: {str(e)}")
-            raise
-        except Exception as e:
-            logger.error(f"Error extracting school details: {str(e)}")
-            raise 
+        logger.info(f"Saving data for {len(results)} schools")
+        self._save_data(results)
+        self._save_metadata(results)
+        return results
 
     def scrape_specific_schools(self, school_codes: List[str]) -> List[Dict]:
-        """
-        Scrape data for specific schools by their codes.
-        
-        Args:
-            school_codes (List[str]): List of school codes to scrape
-            
-        Returns:
-            List[Dict]: List of dictionaries containing school data
-            
-        Raises:
-            Exception: If any error occurs during the scraping process
-        """
-        try:
-            schools_data = []
-            
-            for school_code in school_codes:
-                try:
-                    logger.info(f"Fetching details for school code: {school_code}")
-                    school_details = self._extract_school_data(school_code)
-                    
-                    # Add the school code to the details
-                    school_details['código'] = school_code
+        results: List[Dict] = []
+        for code in school_codes:
+            try:
+                logger.info(f"Fetching details for school {code}")
+                details = self._fetch_school_details(code)
+                results.append(self._transform_to_legacy_format(details))
+                if self.request_delay > 0:
+                    time.sleep(self.request_delay)
+            except Exception as e:
+                logger.error(f"Failed to fetch school {code}: {e}")
 
-                    # Enrich the details
-                    school_details = self._process_school(school_details)
-                    
-                    schools_data.append(school_details)
-                    
-                    # Add delay between requests if not in local mode
-                    if not self.use_local:
-                        time.sleep(self.request_delay)
-                        
-                except Exception as e:
-                    logger.error(f"Failed to fetch details for school code {school_code}: {str(e)}")
-                    continue
-            
-            # Save the data
-            self._save_data(schools_data)
-            
-            return schools_data
-            
-        except Exception as e:
-            logger.error(f"Error during specific schools scraping: {str(e)}")
-            raise 
+        if results:
+            self._save_data(results)
+            self._save_metadata(results)
+        return results
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _save_data(self, data: List[Dict]) -> None:
+        os.makedirs(self.output_dir, exist_ok=True)
+        encoding = os.getenv("ENCODING", "utf-8")
+
+        self._save_csv(data, encoding)
+        self._save_json(data, encoding)
+
+    def _save_csv(self, data: List[Dict], encoding: str) -> None:
+        output_file = os.path.join(self.output_dir, "schools.csv")
+        df = pd.DataFrame(data)
+        df.to_csv(output_file, index=False, encoding=encoding)
+        logger.info(f"Saved {len(data)} schools to {output_file} (CSV)")
+
+    def _save_json(self, data: List[Dict], encoding: str) -> None:
+        output_file = os.path.join(self.output_dir, "schools.json")
+        cleaned = []
+        for school in data:
+            entry = {
+                k: v
+                for k, v in school.items()
+                if v and v != [] and v != {}
+            }
+            if "niveles" in entry:
+                entry["niveles"] = [
+                    {k: v for k, v in level.items() if v}
+                    for level in entry["niveles"]
+                ]
+            if "horario" in entry:
+                entry["horario"] = [h for h in entry["horario"] if h]
+            if "info" in entry:
+                entry["info"] = [i for i in entry["info"] if i]
+            if "inst" in entry:
+                entry["inst"] = [i for i in entry["inst"] if i]
+            cleaned.append(entry)
+
+        with open(output_file, "w", encoding=encoding) as f:
+            indent = None if len(cleaned) > 100 else 4
+            json.dump(
+                cleaned,
+                f,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                indent=indent,
+            )
+        logger.info(f"Saved {len(data)} schools to {output_file} (JSON)")
+
+    def _save_metadata(self, data: List[Dict]) -> None:
+        metadata_file = os.path.join(self.output_dir, "schools.metadata.json")
+        metadata = {
+            "total_schools": len(data),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=4)
+        logger.info(f"Saved metadata to {metadata_file}")

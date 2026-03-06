@@ -1,14 +1,14 @@
 # School Data Scraper
 
-A Python-based web scraper for collecting school information from the Valencian Community's education portal.
+A Python scraper for collecting school information from the Valencian Community's education portal (xacen-backend API).
 
 ## Features
 
-- Scrapes comprehensive school data including basic information, contact details, facilities, and schedules
-- Supports both local file mode and live web scraping
+- Fetches school data from the official REST API (no HTML scraping)
+- JWT authentication handled automatically (public credentials)
+- Paginated school listing with detail enrichment
+- Concurrent detail fetching with configurable thread count
 - Configurable output formats (CSV/JSON)
-- Rate limiting to prevent server overload
-- Graceful error handling for missing or malformed data
 - Docker support for easy deployment
 - Ability to scrape specific schools by their codes
 
@@ -19,10 +19,10 @@ A Python-based web scraper for collecting school information from the Valencian 
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
+├── pyproject.toml
 ├── .env
 ├── data/           # Output directory for scraped data
 ├── logs/           # Log files directory
-├── tmp/            # Directory for local HTML files
 └── src/
     ├── main.py
     └── scraper.py
@@ -31,25 +31,24 @@ A Python-based web scraper for collecting school information from the Valencian 
 ## Prerequisites
 
 - Docker and Docker Compose installed
-- Python 3.9+ (if running without Docker)
-- Required Python packages (if running without Docker):
-  - requests
-  - beautifulsoup4
-  - pandas
+- Python 3.11+ (if running without Docker)
 
 ## Environment Variables
 
 Create a `.env` file with the following variables:
 
 ```env
-CONSULTABASE_URL=https://ceice.gva.es/abc/i_guiadecentros/es/consulta01.asp
-CONSULTA_CENTRO_URL=https://ceice.gva.es/abc/i_guiadecentros/es/centro.asp
+API_BASE_URL=https://xacen-backend.gva.es/xacen-backend/api/v1/
 REQUEST_TIMEOUT=30
 MAX_RETRIES=3
+REQUEST_DELAY=0
+IDIOMA=es
 OUTPUT_DIR=./data
-OUTPUT_FORMAT=CSV  # or JSON
-ENCODING=utf-8
-REQUEST_DELAY=1.0  # Delay between requests in seconds
+OUTPUT_FORMAT=json   # csv or json
+LOG_LEVEL=INFO
+LOG_FILE=./logs/scraper.log
+SCHOOL_SUBSET=0      # 0 for all
+SCHOOL_THREADS=15
 ```
 
 ## Usage with Docker
@@ -59,43 +58,34 @@ REQUEST_DELAY=1.0  # Delay between requests in seconds
    docker-compose build
    ```
 
-2. **Run the scraper in normal mode** (scrapes all schools):
+2. **Run the scraper** (scrapes all schools):
    ```bash
    docker-compose up scraper
    ```
 
-3. **Run in local mode** (using local HTML files, for dev purposes):
-   ```bash
-   Add 
-   
-   LOCAL_MODE=1
-
-   to the .env file and then
-   
-   docker-compose up scraper
-   ```
-
-4. **Scrape specific schools**:
+3. **Scrape specific schools**:
    ```bash
    docker-compose run scraper python src/main.py --school-codes 03012591 03012592
    ```
 
-5. **Combine local mode with specific schools**:
-   ```bash
-   docker-compose run scraper python src/main.py --school-codes 03012591 03012592 --local
-   ```
-
-6. **View the output**:
+4. **View the output**:
    The scraped data will be saved in the `data` directory in your chosen format (CSV or JSON).
+
+## Usage without Docker
+
+```bash
+uv sync
+uv run src/main.py
+```
 
 ## Command Line Arguments
 
-The scraper supports the following command line arguments:
-
-- `--local`: Run in local mode using pre-downloaded HTML files from the `tmp` directory
-- `--school-codes`: List of specific school codes to scrape (e.g., "03012591 03012592")
+- `--school-codes`: List of specific school codes to scrape (e.g., `03012591 03012592`)
+- `--subset N`: Only scrape the first N schools (0 = all)
+- `--threads N`: Number of concurrent threads for detail fetching
 
 Examples:
+
 ```bash
 # Scrape all schools
 python src/main.py
@@ -103,109 +93,70 @@ python src/main.py
 # Scrape specific schools
 python src/main.py --school-codes 03012591 03012592
 
-# Run in local mode
-python src/main.py --local
-
-# Scrape specific schools in local mode
-python src/main.py --school-codes 03012591 03012592 --local
+# Scrape first 10 schools with 4 threads
+python src/main.py --subset 10 --threads 4
 ```
 
 ## How It Works
 
+### API Endpoints
+
+The scraper uses the `xacen-backend` REST API:
+
+1. **Authentication**: `GET /user` with Basic auth returns a JWT token (10 min TTL, auto-refreshed)
+2. **School list**: `GET /guiadecentros/listaCentrosAulariosLibre` — paginated (100 per page)
+3. **School detail**: Multiple `GET` endpoints per school code:
+   - `/centro/datosGenerales` — name, address, coordinates, contact, etc.
+   - `/centro/nivelesAutorizados` — authorized education levels
+   - `/centro/jornadas` — schedule
+   - `/centro/informacionAdicional` — additional information
+   - `/centro/programaLinguistico` — linguistic programs
+   - `/simbolos/servicios` — facilities and services
+
 ### Scraping Process
 
-1. **Initial Data Collection**:
-   - The scraper first makes a POST request to the main search page
-   - It submits a form with parameters to get all schools
-   - The response contains a list of schools with basic information
-
-2. **Detail Extraction**:
-   - For each school, the scraper makes a GET request to its detail page
-   - It extracts comprehensive information including:
-     - Basic information (name, code, type)
-     - Contact details (address, phone, email)
-     - Facilities (from icon titles)
-     - Authorized levels (with detailed breakdown)
-     - Schedule information (filtered to exclude headers)
-     - Additional information
-     - Adscriptions
-
-3. **Data Processing**:
-   - The scraper handles missing fields gracefully
-   - It filters out header text from schedule information
-   - It structures complex data (like levels and adscriptions) into nested objects
-   - Rate limiting is implemented to prevent server overload
-
-4. **Output Generation**:
-   - Data is saved in either CSV or JSON format
-   - The output directory and format are configurable
-   - File encoding is customizable
-
-### Error Handling
-
-- The scraper implements comprehensive error handling:
-  - Network errors are caught and logged
-  - Missing fields are handled gracefully
-  - Invalid HTML structures are detected
-  - Rate limiting prevents server overload
-  - Each school's detail extraction is independent, so one failure doesn't affect others
-
-### Local Mode
-
-- The scraper can run in local mode using pre-downloaded HTML files
-- This is useful for testing and development
-- Files should be placed in the `tmp` directory:
-  - `tmp/consulta01.html` for the main list
-  - `tmp/centro_03012591.html` for school details
+1. Authenticate and obtain a JWT token
+2. Fetch all schools via the paginated list endpoint
+3. For each school, fetch detail data from multiple endpoints
+4. Merge and save the enriched data
 
 ## Output Format
 
-The scraper generates data in the following structure:
-
 ```json
 {
-  "nombre": "School Name",
-  "codigo": "School Code",
-  "regimen": "School Type",
-  "direccion": "Full Address",
-  "telefono": "Phone Number",
-  "email": "Email Address",
-  "localidad": "City",
-  "comarca": "Region",
-  "titular": "Owner",
-  "latitud": "Latitude",
-  "longitud": "Longitude",
-  "instalaciones": ["Facility 1", "Facility 2"],
-  "niveles_autorizados": [
+  "codCentro": "03000047",
+  "denomCentro": "CEIP LA RAMBLA",
+  "regimen": "Público",
+  "direccion": "Avenida DE ALCOY, S/N",
+  "cp": "03698",
+  "localidad": "AGOST",
+  "telefono": "966908135",
+  "denomGenerica": "COL·LEGI D'EDUCACIÓ INFANTIL I PRIMÀRIA LA RAMBLA",
+  "titular": "GENERALITAT VALENCIANA",
+  "cif": "Q5355128I",
+  "latitud": "38.438389",
+  "longitud": "-0.635608",
+  "denomComarca": "L'ALACANTÍ",
+  "email": "03000047@edu.gva.es",
+  "web": "https://portal.edu.gva.es/03000047",
+  "niveles": [
     {
-      "nivel": "Level Name",
-      "unidades_autorizadas": "Authorized Units",
-      "puestos_autorizados": "Authorized Positions",
-      "unidades_activas": "Active Units",
-      "puestos_activos": "Active Positions"
+      "denomNivel": "EDUCACIÓN PRIMARIA",
+      "unidadesAutorizadas": 8,
+      "puestosAutorizados": 200,
+      "unidadesActivas": 11,
+      "puestosActivos": 275
     }
   ],
-  "horario": [
-    "Schedule Item 1",
-    "Schedule Item 2"
+  "horario": ["Jornada lectiva de 9 a 14 h."],
+  "servicios": [
+    { "denominacion": "Biblioteca", "categoria": "Instalaciones" }
   ],
-  "informacion_adicional": ["Additional Info 1", "Additional Info 2"],
-  "adscripciones": [
-    {
-      "tipo": "Adscription Type",
-      "centro": "Adscribed Center"
-    }
+  "programaLinguistico": [
+    { "programa": "Programa de educación plurilingüe", "porcVal": 54, "porcCas": 30, "porcIng": 17 }
   ]
 }
 ```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
 
 ## License
 
