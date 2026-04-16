@@ -1,6 +1,7 @@
 import logging
 import os
 import json
+import threading
 import time
 from typing import List, Dict, Optional
 from base64 import b64encode
@@ -56,6 +57,7 @@ class SchoolScraper:
 
         self._token: Optional[str] = None
         self._token_expiry: float = 0
+        self._auth_lock = threading.Lock()
 
     def _authenticate(self):
         credentials = b64encode(f"{API_USER}:{API_PASS}".encode()).decode()
@@ -74,7 +76,9 @@ class SchoolScraper:
 
     def _ensure_auth(self):
         if self._token is None or time.time() >= self._token_expiry:
-            self._authenticate()
+            with self._auth_lock:
+                if self._token is None or time.time() >= self._token_expiry:
+                    self._authenticate()
 
     def _api_get(self, endpoint: str, params: Optional[dict] = None):
         """Authenticated GET request with retry and token refresh on 403."""
@@ -126,7 +130,11 @@ class SchoolScraper:
             schools = data.get("listaCentros", [])
             all_schools.extend(schools)
 
-            if data.get("SinDatos", True) or not schools:
+            sin_datos = data.get("SinDatos")
+            if sin_datos is None:
+                logger.warning("API response missing 'SinDatos' field, continuing pagination")
+                sin_datos = False
+            if sin_datos or not schools:
                 break
             if limit > 0 and len(all_schools) >= limit:
                 break
@@ -230,9 +238,8 @@ class SchoolScraper:
             if self.request_delay > 0:
                 time.sleep(self.request_delay)
             return self._transform_to_legacy_format(details)
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             logger.error(f"Failed to process school {code}: {e}")
-            logger.exception(e)
             return None
 
     # ------------------------------------------------------------------
@@ -252,12 +259,15 @@ class SchoolScraper:
         )
 
         results: List[Dict] = []
+        failures = 0
 
         if threads <= 1:
             for i, school in enumerate(schools):
                 result = self._process_school(school)
                 if result:
                     results.append(result)
+                else:
+                    failures += 1
                 if (i + 1) % 50 == 0:
                     logger.info(f"Progress: {i + 1}/{len(schools)}")
         else:
@@ -269,12 +279,19 @@ class SchoolScraper:
                     result = future.result()
                     if result:
                         results.append(result)
+                    else:
+                        failures += 1
                     if (i + 1) % 50 == 0:
                         logger.info(f"Progress: {i + 1}/{len(schools)}")
 
         if not results:
-            logger.warning("No valid data to save")
-            return []
+            raise RuntimeError("No schools scraped successfully — aborting to avoid saving empty output")
+
+        failure_rate = failures / len(schools) if schools else 0
+        if failure_rate > 0.5:
+            raise RuntimeError(
+                f"Aborting: {failures}/{len(schools)} schools failed ({failure_rate:.0%})"
+            )
 
         logger.info(f"Saving data for {len(results)} schools")
         self._save_data(results)
